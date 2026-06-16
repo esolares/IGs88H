@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+graphify-out/
+
+# Vulnerable datasets — clone these yourself, don't bundle
+examples/datasets/dsvw/dsvw.py
+examples/datasets/dsvw/ground_truth.json
+examples/datasets/dsvpwa/dsvpwa.py
+examples/datasets/dsvpwa/attacks.py
+examples/datasets/dsvpwa/handlers.py
+examples/datasets/dsvpwa/server.py
+examples/datasets/dsvpwa/SOURCE_README.md
+examples/datasets/dsvpwa/ground_truth.json
+examples/datasets/securityeval/dataset.jsonl
+examples/datasets/securityeval/ground_truth.json

@@ -1,0 +1,28 @@
+{
+  "name": "DSVPWA (Damn Simple Vulnerable Python Web Application)",
+  "source": "https://github.com/sgabe/DSVPWA",
+  "license": "MIT",
+  "description": "Multi-file Python web app with 12 labeled vulnerabilities spanning multiple modules. Tests cross-module graph traversal — bugs flow across dsvpwa.py, server.py, handlers.py, and attacks.py.",
+  "format": "Multiple Python files. Vulnerabilities documented in SOURCE_README.md with OWASP links.",
+  "files": ["dsvpwa.py", "server.py", "handlers.py", "attacks.py"],
+  "total_vulnerabilities": 12,
+  "vulnerability_types": [
+    "SQL Injection (CWE-89)",
+    "Command Injection (CWE-78)",
+    "Path Traversal (CWE-22)",
+    "Cross-Site Scripting (CWE-79)",
+    "Deserialization of Untrusted Data (CWE-502)",
+    "Cross-Site Request Forgery (CWE-352)",
+    "Session Fixation (CWE-384)",
+    "Session Hijacking (CWE-384)",
+    "Insecure Transport (CWE-319)",
+    "Open Redirect (CWE-601)",
+    "Execution After Redirect (CWE-698)",
+    "Clickjacking (CWE-1021)"
+  ],
+  "relevant_cwes": [
+    "CWE-89", "CWE-78", "CWE-22", "CWE-79", "CWE-502",
+    "CWE-352", "CWE-384", "CWE-319", "CWE-601", "CWE-698", "CWE-1021"
+  ],
+  "WARNING": "DO NOT EXECUTE — this is a deliberately vulnerable web application. Parse as text only."
+}

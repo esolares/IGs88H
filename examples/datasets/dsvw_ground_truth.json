@@ -1,0 +1,38 @@
+{
+  "name": "DSVW (Damn Small Vulnerable Web)",
+  "source": "https://github.com/stamparm/DSVW",
+  "license": "Unlicense (public domain)",
+  "description": "Single 98-line Python web app with 26 labeled vulnerabilities. Tests data-flow analysis through a connected application — tainted HTTP params flow into SQL queries, subprocess, pickle, exec, file open.",
+  "format": "Single Python file (dsvw.py). Vulnerabilities enumerated in the CASES tuple with descriptions and OWASP links.",
+  "total_vulnerabilities": 26,
+  "vulnerability_types": [
+    "Blind SQL Injection (boolean + time-based)",
+    "UNION SQL Injection",
+    "Login Bypass (SQL injection)",
+    "HTTP Parameter Pollution",
+    "Reflected/Stored/DOM/JSONP XSS",
+    "XML External Entity (local + remote)",
+    "Server Side Request Forgery",
+    "Blind XPath Injection",
+    "Cross Site Request Forgery",
+    "Clickjacking",
+    "Unvalidated Redirect",
+    "Arbitrary Code Execution (command injection)",
+    "Path Traversal + Source Code Disclosure",
+    "Remote File Inclusion with exec()",
+    "HTTP Header Injection",
+    "Pickle Deserialization",
+    "Denial of Service (memory)"
+  ],
+  "relevant_cwes": [
+    "CWE-89 (SQL injection)",
+    "CWE-22 (Path traversal)",
+    "CWE-78 (OS command injection)",
+    "CWE-79 (XSS)",
+    "CWE-95 (Eval / remote include)",
+    "CWE-502 (Pickle deserialization)",
+    "CWE-611 (XXE)",
+    "CWE-918 (SSRF)"
+  ],
+  "WARNING": "DO NOT EXECUTE — this is a deliberately vulnerable web server. Parse as text only."
+}

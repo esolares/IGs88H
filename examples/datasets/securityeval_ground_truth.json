@@ -1,0 +1,18 @@
+{
+  "name": "SecurityEval",
+  "source": "https://github.com/s2e-lab/SecurityEval",
+  "license": "Academic (cite MSR4P&S'22 paper)",
+  "description": "121 Python code snippets with known vulnerabilities, each labeled by CWE ID. Isolated single-function samples — good for testing per-node bug detection accuracy.",
+  "format": "JSONL with fields: ID (contains CWE), Prompt (partial code), Insecure_code (full vulnerable code)",
+  "total_samples": 121,
+  "unique_cwes": 69,
+  "cwe_overlap_with_bug_injector": [
+    "CWE-089 (SQL injection) — 2 samples",
+    "CWE-022 (Path traversal) — 4 samples",
+    "CWE-094 (Code injection / eval) — 3 samples",
+    "CWE-078 (OS command injection) — 2 samples",
+    "CWE-502 (Deserialization) — 4 samples",
+    "CWE-798 (Hardcoded credentials) — 1 sample"
+  ],
+  "WARNING": "DO NOT EXECUTE — this code contains real vulnerability patterns. Parse as text only."
+}
