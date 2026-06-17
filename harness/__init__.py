@@ -1,14 +1,18 @@
 """
 Recursive Agent Harness for Code Knowledge Graph Traversal
 
+Multi-provider support: Anthropic Claude, Google Gemini, OpenAI (experimental).
+
 Usage:
     from harness import AgentHarness, ToolRegistry, CodeGraph, GraphTraversal
 
     # Load a CodeGraph knowledge graph
     graph = CodeGraph.from_json("path/to/graph.json")
 
-    # Set up traversal with analysis
-    traversal = GraphTraversal(graph, model="claude-sonnet-4-6")
+    # Set up traversal with analysis (any supported model)
+    traversal = GraphTraversal(graph, model="claude-sonnet-4-6")   # Anthropic
+    traversal = GraphTraversal(graph, model="gemini-2.5-flash")    # Gemini
+    traversal = GraphTraversal(graph, model="gpt-4o")              # OpenAI
     report = traversal.traverse()
 
     # Save results

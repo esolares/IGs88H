@@ -731,7 +731,7 @@ Rules:
         combined = f"{text1}\n\n--- VERIFICATION PASS ---\n\n{text2}\n\n--- DEEP ANALYSIS PASS ---\n\n{text3}"
         return combined, tokens1 + tokens2 + tokens3
 
-    # ── OpenAI backend (experimental, untested) ────────────────
+    # ── OpenAI backend (experimental) ───────────────────────────
 
     def _call_openai(self, prompt: str, max_retries: int = 5) -> tuple[str, int]:
         """Single OpenAI API call with retry on transient errors."""

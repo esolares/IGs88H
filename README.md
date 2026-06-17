@@ -4,7 +4,7 @@ Multi-layer system for automated code analysis. An orchestrator-driven traversal
 engine walks code knowledge graphs (via [Graphify](https://github.com/safishamsi/graphify)
 or built-in AST), sending each node's code to an LLM for analysis. Bottom-up by
 default: leaves first, results bubble up to parents. Multi-provider support
-(Anthropic Claude, Google Gemini).
+(Anthropic Claude, Google Gemini, OpenAI). *Please note that OpenAI is currently experimental.*
 
 ## Architecture
 
@@ -44,7 +44,7 @@ costs predictable — 2 API calls per node (standard) or 3 with deep analysis.
 
 ```bash
 # Install deps
-pip install anthropic google-genai python-dotenv --break-system-packages
+pip install anthropic google-genai openai python-dotenv --break-system-packages
 
 # Install Graphify for multi-language graph extraction
 uv tool install graphifyy
@@ -218,6 +218,7 @@ All 9 task factories tested against [DSVW](https://github.com/stamparm/DSVW)
 |----------|---------------|---------------|---------|
 | Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5` | Multi-pass: static hints + verification (+ deep) | `ANTHROPIC_API_KEY` |
 | Google Gemini | `gemini-2.5-flash`, `gemini-2.5-pro` | Multi-pass: static hints + verification (+ deep) | `GEMINI_API_KEY` |
+| OpenAI *(experimental)* | `gpt-4o`, `gpt-4.1` | Multi-pass: static hints + verification (+ deep) | `OPENAI_API_KEY` |
 
 ## Graph Integration
 
