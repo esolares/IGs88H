@@ -4,7 +4,8 @@ Multi-layer system for automated code analysis. An orchestrator-driven traversal
 engine walks code knowledge graphs (via [Graphify](https://github.com/safishamsi/graphify)
 or built-in AST), sending each node's code to an LLM for analysis. Bottom-up by
 default: leaves first, results bubble up to parents. Multi-provider support
-(Anthropic Claude, Google Gemini, OpenAI). *Please note that OpenAI is currently experimental.*
+(Anthropic Claude, Google Gemini, OpenAI, and local models via any OpenAI-compatible API).
+*Please note that OpenAI is currently experimental.*
 
 ## Architecture
 
@@ -25,6 +26,7 @@ Traversal Orchestrator (bottom-up / DFS / BFS / by-type)
     │       │
     │       ├── Anthropic (Claude Sonnet/Haiku) — with optional analysis tools
     │       ├── Google Gemini (via Vertex AI) — two-pass: static hints + verification
+    │       ├── Local models (Ollama, llama.cpp, LM Studio, vLLM) — via OpenAI-compatible API
     │       │
     │       └── Analysis Tools
     │           └── static_analysis  – pattern-based lint (always available)
@@ -56,6 +58,12 @@ python igs88h.py /path/to/project --strategy bottom_up --task security --model c
 
 # Same analysis with Gemini Flash
 python igs88h.py /path/to/project --strategy bottom_up --task security --model gemini-2.5-flash
+
+# Use a local model via Ollama (default: http://localhost:11434/v1)
+python igs88h.py /path/to/project --task security --local --model llama3
+
+# Local model with a custom API endpoint (llama.cpp, LM Studio, vLLM, etc.)
+python igs88h.py /path/to/project --local --model codellama --api-url http://localhost:8080/v1
 
 # Deep analysis (3-pass) — higher recall, catches commonly missed vulns
 python igs88h.py /path/to/project --task security --model gemini-2.5-flash --deep-analysis
@@ -219,6 +227,27 @@ All 9 task factories tested against [DSVW](https://github.com/stamparm/DSVW)
 | Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5` | Multi-pass: static hints + verification (+ deep) | `ANTHROPIC_API_KEY` |
 | Google Gemini | `gemini-2.5-flash`, `gemini-2.5-pro` | Multi-pass: static hints + verification (+ deep) | `GEMINI_API_KEY` |
 | OpenAI *(experimental)* | `gpt-4o`, `gpt-4.1` | Multi-pass: static hints + verification (+ deep) | `OPENAI_API_KEY` |
+| Local models | `llama3`, `codellama`, `qwen2.5-coder`, any | Multi-pass: static hints + verification (+ deep) | None (uses `--local`) |
+
+### Local Model Support
+
+Use the `--local` flag to run analysis against any OpenAI-compatible API server. No API key needed.
+
+```bash
+# Ollama (default endpoint: http://localhost:11434/v1)
+python igs88h.py /path/to/project --task security --local --model llama3
+
+# Custom endpoint (llama.cpp, LM Studio, vLLM, etc.)
+python igs88h.py /path/to/project --local --model codellama --api-url http://localhost:8080/v1
+```
+
+| Flag | Purpose | Default |
+|------|---------|---------|
+| `--local` | Enable local model mode | _(off)_ |
+| `--api-url` | Custom API endpoint | `http://localhost:11434/v1` (Ollama) |
+| `--model` | Model name as served by the local API | _(required)_ |
+
+Compatible with [Ollama](https://ollama.com), [llama.cpp](https://github.com/ggml-org/llama.cpp), [LM Studio](https://lmstudio.ai), [vLLM](https://github.com/vllm-project/vllm), and any server exposing an OpenAI-compatible `/v1/chat/completions` endpoint.
 
 ## Graph Integration
 
