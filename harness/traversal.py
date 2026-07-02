@@ -25,6 +25,7 @@ from .core import AgentHarness, ToolRegistry
 from .codegraph import CodeGraph, GraphNode, NodeType
 
 _OPENAI_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt-")
+_DEFAULT_LOCAL_URL = "http://localhost:11434/v1"
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,8 @@ class GraphTraversal:
         analysis_tools: ToolRegistry | None = None,
         max_agent_turns: int = 3,
         deep_analysis: bool = False,
+        local: bool = False,
+        api_url: str | None = None,
         # Kept for backwards compat
         base_tools: ToolRegistry | None = None,
     ):
@@ -395,9 +398,10 @@ class GraphTraversal:
         self.analysis_tools = analysis_tools or base_tools or ToolRegistry()
         self.max_agent_turns = max_agent_turns
         self.deep_analysis = deep_analysis
+        self._is_local = local
 
-        self._is_gemini = model.startswith("gemini")
-        self._is_openai = model.startswith(_OPENAI_PREFIXES)
+        self._is_gemini = not local and model.startswith("gemini")
+        self._is_openai = local or model.startswith(_OPENAI_PREFIXES)
         if self._is_gemini:
             from google import genai
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -406,7 +410,11 @@ class GraphTraversal:
             self.client = None
         elif self._is_openai:
             from openai import OpenAI
-            self._openai = OpenAI()
+            if local:
+                base_url = api_url or _DEFAULT_LOCAL_URL
+                self._openai = OpenAI(base_url=base_url, api_key="local")
+            else:
+                self._openai = OpenAI()
             self._gemini = None
             self.client = None
         else:
@@ -747,7 +755,9 @@ Rules:
                 )
                 text = response.choices[0].message.content or ""
                 usage = response.usage
-                tokens = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+                tokens = 0
+                if usage:
+                    tokens = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
                 return text, tokens
             except Exception as e:
                 err_str = str(e)
@@ -851,8 +861,13 @@ Rules:
         self._visited.add(node.id)
 
         children = self.graph.get_children(node.id)
-        for child in children:
-            self._post_order(child, task_factory, depth + 1)
+
+        # Parallelize sibling analysis — siblings are independent
+        if self.parallel > 1 and len(children) > 1:
+            self._parallel_post_order(children, task_factory, depth + 1)
+        else:
+            for child in children:
+                self._post_order(child, task_factory, depth + 1)
 
         children_analyses = {
             c.id: self._report.results[c.id].analysis[:1000]
@@ -865,6 +880,51 @@ Rules:
         result.children_results = [c.id for c in children]
         self._report.results[node.id] = result
         self._report.traversal_order.append(node.id)
+
+    def _parallel_post_order(self, children: list[GraphNode], task_factory: Callable, depth: int):
+        """Analyze sibling subtrees in parallel using a thread pool."""
+        # Separate into leaves (can run fully parallel) and branches (have own children)
+        leaves = []
+        branches = []
+        for child in children:
+            if child.id in self._visited or depth > self.max_depth:
+                self._report.nodes_skipped += 1
+                continue
+            if not self.node_filter(child):
+                self._report.nodes_skipped += 1
+                continue
+            grandchildren = self.graph.get_children(child.id)
+            if grandchildren:
+                branches.append(child)
+            else:
+                leaves.append(child)
+
+        # Analyze leaf siblings in parallel
+        if len(leaves) > 1:
+            for child in leaves:
+                self._visited.add(child.id)
+            with ThreadPoolExecutor(max_workers=self.parallel) as executor:
+                futures = {
+                    executor.submit(self._analyze_node, child, task_factory, depth): child
+                    for child in leaves
+                }
+                for future in as_completed(futures):
+                    child = futures[future]
+                    result = future.result()
+                    result.children_results = []
+                    self._report.results[child.id] = result
+                    self._report.traversal_order.append(child.id)
+        else:
+            for child in leaves:
+                self._visited.add(child.id)
+                result = self._analyze_node(child, task_factory, depth)
+                result.children_results = []
+                self._report.results[child.id] = result
+                self._report.traversal_order.append(child.id)
+
+        # Process branches sequentially (they recurse and manage their own children)
+        for child in branches:
+            self._post_order(child, task_factory, depth)
 
     # ── Strategy: DFS (top-down) ─────────────────────────────
 

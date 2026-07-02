@@ -1,7 +1,7 @@
 """
 Recursive Agent Harness for Code Knowledge Graph Traversal
 
-Multi-provider support: Anthropic Claude, Google Gemini, OpenAI (experimental).
+Multi-provider support: Anthropic Claude, Google Gemini, OpenAI, local LLMs (Ollama/llama.cpp).
 
 Usage:
     from harness import AgentHarness, ToolRegistry, CodeGraph, GraphTraversal
@@ -13,6 +13,7 @@ Usage:
     traversal = GraphTraversal(graph, model="claude-sonnet-4-6")   # Anthropic
     traversal = GraphTraversal(graph, model="gemini-2.5-flash")    # Gemini
     traversal = GraphTraversal(graph, model="gpt-4o")              # OpenAI
+    traversal = GraphTraversal(graph, model="llama3", local=True)  # Local (Ollama)
     report = traversal.traverse()
 
     # Save results

@@ -7,14 +7,20 @@ runs orchestrator-driven traversal with LLM analysis, and exports results.
 
 Usage:
   python igs88h.py /path/to/your/codebase --task security --model gemini-2.5-flash
+  python igs88h.py /path/to/your/codebase --task security --model claude-sonnet-4-6
+  python igs88h.py /path/to/your/codebase --task security --local --model llama3
+  python igs88h.py /path/to/your/codebase --local --model codellama --api-url http://localhost:8080/v1
   python igs88h.py --graph /path/to/graph.json --task analyze
 """
 
 import argparse
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -51,6 +57,11 @@ def index_with_graphify(codebase_path: str) -> CodeGraph:
 
     This calls `graphify` via subprocess. If Graphify isn't
     installed, falls back to a built-in AST indexer.
+
+    Graphify requires files to be git-tracked. If the target directory
+    contains untracked files (e.g. test datasets that aren't committed),
+    we copy to a temporary git repo, run graphify there, and bring the
+    graph back.
     """
     codebase = Path(codebase_path).resolve()
     graph_path = codebase / "graphify-out" / "graph.json"
@@ -68,10 +79,76 @@ def index_with_graphify(codebase_path: str) -> CodeGraph:
             capture_output=True,
             text=True,
         )
-        return CodeGraph.from_json(graph_path)
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        logger.warning(f"Graphify CLI not available ({e}), using synthetic graph")
+        if graph_path.exists():
+            data = json.loads(graph_path.read_text())
+            if data.get("nodes"):
+                return CodeGraph.from_json(graph_path)
+            logger.info("Graphify produced empty graph (files likely not git-tracked)")
+    except FileNotFoundError:
+        logger.warning("Graphify CLI not installed, using synthetic graph")
         return build_synthetic_graph(codebase)
+    except subprocess.CalledProcessError:
+        pass
+
+    # Graphify produced no nodes — likely because files aren't git-tracked.
+    # Copy to a temp dir with its own git repo and retry.
+    logger.info("Retrying graphify in isolated git repo...")
+    try:
+        graph = _graphify_in_temp_repo(codebase)
+        if graph:
+            return graph
+    except Exception as e:
+        logger.warning(f"Graphify temp-repo fallback failed: {e}")
+
+    logger.warning("Falling back to synthetic graph")
+    return build_synthetic_graph(codebase)
+
+
+def _graphify_in_temp_repo(codebase: Path) -> CodeGraph | None:
+    """Copy codebase to a temp dir with git init, run graphify, return the graph."""
+    with tempfile.TemporaryDirectory(prefix="igs88h-graphify-") as tmp:
+        tmp_path = Path(tmp) / "src"
+        shutil.copytree(codebase, tmp_path, ignore=shutil.ignore_patterns(
+            "graphify-out", ".git", "__pycache__", "*.pyc",
+        ))
+
+        subprocess.run(
+            ["git", "init"], cwd=tmp_path,
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "add", "."], cwd=tmp_path,
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=tmp_path, capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "igs88h",
+                 "GIT_AUTHOR_EMAIL": "igs88h@local",
+                 "GIT_COMMITTER_NAME": "igs88h",
+                 "GIT_COMMITTER_EMAIL": "igs88h@local"},
+        )
+
+        result = subprocess.run(
+            ["graphify", "extract", str(tmp_path), "--no-cluster"],
+            capture_output=True, text=True,
+        )
+        logger.info(f"Graphify (temp repo): {result.stdout.strip()}")
+        if result.returncode != 0:
+            logger.warning(f"Graphify extract failed: {result.stderr.strip()}")
+            return None
+
+        tmp_graph = tmp_path / "graphify-out" / "graph.json"
+        if not tmp_graph.exists():
+            return None
+
+        # Copy graph back to original location
+        dest = codebase / "graphify-out"
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_graph, dest / "graph.json")
+        logger.info(f"Graphify graph saved to {dest / 'graph.json'}")
+
+        return CodeGraph.from_json(dest / "graph.json")
 
 
 def build_synthetic_graph(codebase: Path) -> CodeGraph:
@@ -338,6 +415,15 @@ def main():
              "missed vulnerability classes (CWE-95, CWE-113, CWE-698, etc.). "
              "Increases token usage ~20-50%% but significantly improves recall.",
     )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Use a local LLM via OpenAI-compatible API (Ollama, llama.cpp, etc.)",
+    )
+    parser.add_argument(
+        "--api-url",
+        help="Custom API URL for local LLM (default: http://localhost:11434/v1 for Ollama)",
+    )
 
     args = parser.parse_args()
 
@@ -390,9 +476,11 @@ def main():
         return
 
     # Analysis-only tools (static_analysis — no execution, no file reading)
-    # Gemini and OpenAI use single calls — no tool loop needed
+    # Gemini, OpenAI, and local models use single calls — no tool loop needed
     from harness.traversal import _OPENAI_PREFIXES
-    needs_tools = not args.model.startswith("gemini") and not args.model.startswith(_OPENAI_PREFIXES)
+    needs_tools = (not args.local
+                   and not args.model.startswith("gemini")
+                   and not args.model.startswith(_OPENAI_PREFIXES))
     analysis_tools = build_analysis_tools() if needs_tools else None
 
     # Configure traversal
@@ -407,12 +495,19 @@ def main():
         analysis_tools=analysis_tools,
         max_agent_turns=3,
         deep_analysis=args.deep_analysis,
+        local=args.local,
+        api_url=args.api_url,
     )
 
     # Run
     depth_label = "deep (3-pass)" if args.deep_analysis else "standard (2-pass)"
     print(f"\n🚀 Starting {args.strategy.upper()} traversal with '{args.task}' task...")
-    print(f"   Model: {args.model}")
+    if args.local:
+        from harness.traversal import _DEFAULT_LOCAL_URL
+        url = args.api_url or _DEFAULT_LOCAL_URL
+        print(f"   Model: {args.model} (local @ {url})")
+    else:
+        print(f"   Model: {args.model}")
     print(f"   Analysis: {depth_label}")
     print(f"   Max depth: {args.max_depth}")
     print(f"   Parallel: {args.parallel}\n")
