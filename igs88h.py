@@ -6,11 +6,18 @@ CLI entry point. Indexes a codebase with Graphify (or built-in AST),
 runs orchestrator-driven traversal with LLM analysis, and exports results.
 
 Usage:
-  python igs88h.py /path/to/your/codebase --task security --model gemini-2.5-flash
-  python igs88h.py /path/to/your/codebase --task security --model claude-sonnet-4-6
+  python igs88h.py /path/to/your/codebase --task security --model gemini-3.5-flash
+  python igs88h.py /path/to/your/codebase --task security --model claude-sonnet-5-5
+  python igs88h.py /path/to/your/codebase --task security   # default model from models.json
   python igs88h.py /path/to/your/codebase --task security --local --model llama3
   python igs88h.py /path/to/your/codebase --local --model codellama --api-url http://localhost:8080/v1
   python igs88h.py --graph /path/to/graph.json --task analyze
+
+  # CWE post-classification (enriches findings with MITRE CWE mappings)
+  python igs88h.py /path/to/project --task security --model gemini-3.5-flash \
+      --classify-cwes --cwe-model gemma4:12b-it-qat
+  python igs88h.py --classify-report results/report.json --cwe-model gemma4:12b-it-qat
+  python igs88h.py --classify-report results/report.json --cwe-mode single --cwe-model gemma4
 """
 
 import argparse
@@ -21,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -342,6 +350,115 @@ Consider:
 Return structured JSON with specific, actionable suggestions."""
 
 
+# ── CWE Post-Classification ─────────────────────────────────
+
+def classify_report_cwes(report_data: dict, cwe_mode: str = "2stage",
+                         cwe_model: str = "gemma4:12b-it-qat",
+                         cwe_api_url: str = "http://localhost:11434/v1") -> dict:
+    """Post-process a report to add CWE classifications to all findings.
+
+    Extracts findings from each node's analysis text, runs the CWE classifier,
+    and enriches the report with classified CWE mappings.
+
+    Args:
+        report_data: Report dict (from TraversalReport.to_dict() or loaded JSON).
+        cwe_mode: "2stage" (category→CWE, default) or "single" (full taxonomy).
+        cwe_model: Model name for the classifier (Ollama or OpenAI-compatible).
+        cwe_api_url: API endpoint for the classifier model.
+
+    Returns:
+        Enriched report_data with cwe_classification added to each node and summary.
+    """
+    sys.path.insert(0, str(Path(__file__).parent / "examples" / "datasets"))
+    from score_reports import (
+        extract_findings_from_node,
+        classify_cwes_2stage,
+        classify_cwes_single_stage,
+        classify_cwes_db_search,
+        classify_cwes_embedding,
+    )
+    from harness.cwe_db import CWEDatabase
+
+    cwe_db = CWEDatabase.load()
+    logger.info(f"CWE Database: {len(cwe_db.entries)} entries (v{cwe_db.version})")
+
+    total_findings = 0
+    all_cwes = set()
+    nodes_with_findings = 0
+    start = time.time()
+
+    results = report_data.get("results", {})
+    for nid, node_result in results.items():
+        analysis = node_result.get("analysis", "")
+        if not analysis:
+            continue
+
+        findings = extract_findings_from_node(analysis, mode="inferred")
+        if not findings:
+            continue
+
+        logger.info(f"  Classifying {len(findings)} findings in {node_result.get('name', nid)}")
+
+        if cwe_mode == "single":
+            classified = classify_cwes_single_stage(
+                findings, cwe_db, cwe_model, cwe_api_url)
+        elif cwe_mode == "db_search":
+            classified = classify_cwes_db_search(findings, cwe_db)
+        elif cwe_mode == "embedding":
+            classified = classify_cwes_embedding(
+                findings, cwe_db, model=cwe_model, api_url=cwe_api_url)
+        else:
+            classified = classify_cwes_2stage(
+                findings, cwe_db, cwe_model, cwe_api_url)
+
+        enriched = []
+        for f in classified:
+            classified_cwes = sorted(f.get("llm_cwes", set()))
+            original_cwes = sorted(f.get("cwes", set()))
+            all_cwes.update(classified_cwes)
+            entry = {
+                "name": f.get("name", ""),
+                "severity": f.get("severity", ""),
+                "original_cwes": original_cwes,
+                "classified_cwes": classified_cwes,
+            }
+            if "cwe_category" in f:
+                entry["category"] = f["cwe_category"]
+            enriched.append(entry)
+
+        total_findings += len(enriched)
+        nodes_with_findings += 1
+        node_result["cwe_classification"] = {"findings": enriched}
+
+    duration = time.time() - start
+    report_data.setdefault("summary", {})["cwe_classification"] = {
+        "method": cwe_mode,
+        "model": cwe_model,
+        "total_findings_classified": total_findings,
+        "nodes_with_findings": nodes_with_findings,
+        "unique_cwes": sorted(all_cwes),
+        "classification_duration_s": round(duration, 2),
+    }
+
+    logger.info(f"CWE classification: {total_findings} findings, "
+                f"{len(all_cwes)} unique CWEs, {duration:.1f}s")
+    return report_data
+
+
+MODELS_CONFIG = Path(__file__).parent / "models.json"
+
+
+def load_models_config(path: Path = MODELS_CONFIG) -> dict:
+    """Read the model registry (default model, benchmark matrix, prices)."""
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError as e:
+        raise SystemExit(f"Model registry not found: {path}. "
+                         "Pass --model explicitly or restore models.json.") from e
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{path} is not valid JSON: {e}") from e
+
+
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
@@ -379,8 +496,24 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="Model to use (e.g. claude-sonnet-4-6, gemini-2.5-flash, gpt-4o)",
+        default=None,
+        help="Model to use (e.g. claude-sonnet-5-5, claude-opus-5-5, gemini-3.5-flash, "
+             "gpt-4o). Default: 'default_model' in models.json",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help="Max output tokens per LLM call (default: 4096). On Claude 5.x models "
+             "thinking tokens count against this limit; truncated calls are counted "
+             "in the report summary",
+    )
+    parser.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh", "max"],
+        default=None,
+        help="Anthropic only: output_config.effort. Default: not sent (model default; "
+             "claude-opus-5-5 defaults to medium, others to high)",
     )
     parser.add_argument(
         "--filter-type",
@@ -424,8 +557,83 @@ def main():
         "--api-url",
         help="Custom API URL for local LLM (default: http://localhost:11434/v1 for Ollama)",
     )
+    parser.add_argument(
+        "--classify-cwes",
+        action="store_true",
+        help="Run CWE post-classification on findings after analysis",
+    )
+    parser.add_argument(
+        "--classify-report",
+        metavar="PATH",
+        help="Post-hoc: classify CWEs in an existing report.json (skips scan)",
+    )
+    parser.add_argument(
+        "--cwe-mode",
+        choices=["2stage", "single", "db_search", "embedding"],
+        default="2stage",
+        help="CWE classification strategy (default: 2stage). "
+             "db_search and embedding require no LLM classifier calls.",
+    )
+    parser.add_argument(
+        "--cwe-model",
+        help="Model for CWE classifier (default: --model value). "
+             "For embedding mode, defaults to nomic-embed-text:latest.",
+    )
+    parser.add_argument(
+        "--cwe-api-url",
+        help="API URL for CWE classifier (default: --api-url or Ollama default)",
+    )
 
     args = parser.parse_args()
+
+    if args.model is None:
+        args.model = load_models_config()["default_model"]
+
+    # Resolve CWE classifier settings
+    from harness.traversal import _OPENAI_PREFIXES, _DEFAULT_LOCAL_URL
+    if args.effort and (args.local or args.model.startswith("gemini")
+                        or args.model.startswith(_OPENAI_PREFIXES)):
+        parser.error("--effort applies to Anthropic models only")
+    if args.cwe_model:
+        cwe_model = args.cwe_model
+    elif args.cwe_mode == "embedding":
+        cwe_model = "nomic-embed-text:latest"
+    else:
+        cwe_model = args.model
+    cwe_api_url = args.cwe_api_url or args.api_url or _DEFAULT_LOCAL_URL
+
+    # ── Post-hoc classification mode ──
+    if args.classify_report:
+        report_path = Path(args.classify_report)
+        if not report_path.exists():
+            print(f"Error: report not found: {report_path}")
+            sys.exit(1)
+
+        print(f"\n🔬 Post-hoc CWE classification")
+        print(f"   Report:  {report_path}")
+        print(f"   Mode:    {args.cwe_mode}")
+        print(f"   Model:   {cwe_model}")
+        print(f"   API URL: {cwe_api_url}\n")
+
+        report_data = json.loads(report_path.read_text())
+        report_data = classify_report_cwes(
+            report_data, args.cwe_mode, cwe_model, cwe_api_url)
+
+        out = args.output if args.output != "analysis_report.json" else str(
+            report_path.parent / f"{report_path.stem}-classified.json")
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(json.dumps(report_data, indent=2))
+
+        cwe_info = report_data["summary"]["cwe_classification"]
+        print(f"\n{'='*60}")
+        print(f"✅ CWE classification complete!")
+        print(f"   Findings classified: {cwe_info['total_findings_classified']}")
+        print(f"   Unique CWEs:         {len(cwe_info['unique_cwes'])}")
+        print(f"   Duration:            {cwe_info['classification_duration_s']:.1f}s")
+        print(f"\n📄 Enriched report saved to {out}")
+        return
+
+    # ── Normal scan mode ──
 
     # Load or build graph
     if args.graph:
@@ -477,7 +685,6 @@ def main():
 
     # Analysis-only tools (static_analysis — no execution, no file reading)
     # Gemini, OpenAI, and local models use single calls — no tool loop needed
-    from harness.traversal import _OPENAI_PREFIXES
     needs_tools = (not args.local
                    and not args.model.startswith("gemini")
                    and not args.model.startswith(_OPENAI_PREFIXES))
@@ -497,20 +704,25 @@ def main():
         deep_analysis=args.deep_analysis,
         local=args.local,
         api_url=args.api_url,
+        max_tokens=args.max_tokens,
+        effort=args.effort,
     )
 
     # Run
     depth_label = "deep (3-pass)" if args.deep_analysis else "standard (2-pass)"
     print(f"\n🚀 Starting {args.strategy.upper()} traversal with '{args.task}' task...")
     if args.local:
-        from harness.traversal import _DEFAULT_LOCAL_URL
         url = args.api_url or _DEFAULT_LOCAL_URL
         print(f"   Model: {args.model} (local @ {url})")
     else:
         print(f"   Model: {args.model}")
     print(f"   Analysis: {depth_label}")
+    print(f"   Max tokens: {args.max_tokens}" + (f" | Effort: {args.effort}" if args.effort else ""))
     print(f"   Max depth: {args.max_depth}")
-    print(f"   Parallel: {args.parallel}\n")
+    print(f"   Parallel: {args.parallel}")
+    if args.classify_cwes:
+        print(f"   CWE classify: {args.cwe_mode} (model: {cwe_model})")
+    print()
 
     report = traversal.traverse(
         root_ids=args.root,
@@ -522,15 +734,32 @@ def main():
     print(f"✅ Traversal complete!")
     print(f"   Nodes analyzed: {report.nodes_visited}")
     print(f"   Nodes skipped:  {report.nodes_skipped}")
-    print(f"   Total tokens:   {report.total_tokens:,}")
+    print(f"   Total tokens:   {report.total_tokens:,} "
+          f"(input {report.total_input_tokens:,} / output {report.total_output_tokens:,})")
+    print(f"   LLM calls:      {sum(report.stop_reason_counts.values())} "
+          f"(truncated {report.truncated_calls}, refused {report.refused_calls})")
     print(f"   Duration:       {report.total_duration_s:.1f}s")
     if report.errors:
         print(f"   Errors:         {len(report.errors)}")
         for err in report.errors[:5]:
             print(f"     ⚠ {err}")
 
+    report_data = report.to_dict()
+
+    # CWE post-classification (inline mode)
+    if args.classify_cwes:
+        print(f"\n🔬 Running CWE post-classification ({args.cwe_mode})...")
+        report_data = classify_report_cwes(
+            report_data, args.cwe_mode, cwe_model, cwe_api_url)
+        cwe_info = report_data["summary"]["cwe_classification"]
+        print(f"   Findings classified: {cwe_info['total_findings_classified']}")
+        print(f"   Unique CWEs:         {len(cwe_info['unique_cwes'])}")
+        print(f"   Duration:            {cwe_info['classification_duration_s']:.1f}s")
+
     # Save
-    report.save(args.output)
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report_data, indent=2))
     print(f"\n📄 Report saved to {args.output}")
 
     # Quick preview
@@ -542,6 +771,14 @@ def main():
         print(f"  File: {r.file_path}")
         preview = r.analysis[:200].replace("\n", " ")
         print(f"  Analysis: {preview}...")
+        if args.classify_cwes and nid in report_data["results"]:
+            cwe_cls = report_data["results"][nid].get("cwe_classification", {})
+            if cwe_cls.get("findings"):
+                cwes = set()
+                for f in cwe_cls["findings"]:
+                    cwes.update(f.get("classified_cwes", []))
+                if cwes:
+                    print(f"  CWEs: {', '.join(sorted(cwes))}")
         print()
 
 

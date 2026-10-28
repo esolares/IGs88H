@@ -11,7 +11,9 @@ The orchestrator that:
 
 import json
 import logging
+import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
@@ -26,6 +28,15 @@ from .codegraph import CodeGraph, GraphNode, NodeType
 
 _OPENAI_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt-")
 _DEFAULT_LOCAL_URL = "http://localhost:11434/v1"
+
+# Provider stop/finish reasons that mean the answer is incomplete or withheld.
+# A truncated or refused pass is still scored, so reports must count them.
+_TRUNCATED_REASONS = {"max_tokens", "MAX_TOKENS", "length"}
+_REFUSED_REASONS = {
+    "refusal",                                                   # Anthropic
+    "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION",  # Gemini
+    "content_filter",                                            # OpenAI
+}
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +58,9 @@ class NodeResult:
     analysis: str
     children_results: list[str] = field(default_factory=list)
     tokens_used: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    stop_reasons: list[str] = field(default_factory=list)
     duration_s: float = 0.0
     depth: int = 0
     error: str | None = None
@@ -58,10 +72,26 @@ class TraversalReport:
     results: dict[str, NodeResult] = field(default_factory=dict)
     traversal_order: list[str] = field(default_factory=list)
     total_tokens: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    stop_reason_counts: Counter = field(default_factory=Counter)
     total_duration_s: float = 0.0
     nodes_visited: int = 0
     nodes_skipped: int = 0
     errors: list[str] = field(default_factory=list)
+    model: str = ""
+    deep_analysis: bool = False
+    max_tokens: int = 0
+    effort: str | None = None
+
+    @property
+    def truncated_calls(self) -> int:
+        return sum(n for r, n in self.stop_reason_counts.items() if r in _TRUNCATED_REASONS)
+
+    @property
+    def refused_calls(self) -> int:
+        return sum(n for r, n in self.stop_reason_counts.items()
+                   if r in _REFUSED_REASONS or r.startswith("PROMPT_BLOCKED"))
 
     def to_dict(self) -> dict:
         return {
@@ -69,8 +99,18 @@ class TraversalReport:
                 "nodes_visited": self.nodes_visited,
                 "nodes_skipped": self.nodes_skipped,
                 "total_tokens": self.total_tokens,
+                "total_input_tokens": self.total_input_tokens,
+                "total_output_tokens": self.total_output_tokens,
                 "total_duration_s": round(self.total_duration_s, 2),
                 "errors": len(self.errors),
+                "model": self.model,
+                "deep_analysis": self.deep_analysis,
+                "max_tokens": self.max_tokens,
+                "effort": self.effort,
+                "llm_calls": sum(self.stop_reason_counts.values()),
+                "stop_reasons": dict(self.stop_reason_counts),
+                "truncated_calls": self.truncated_calls,
+                "refused_calls": self.refused_calls,
             },
             "traversal_order": self.traversal_order,
             "results": {
@@ -81,6 +121,9 @@ class TraversalReport:
                     "depth": r.depth,
                     "analysis": r.analysis,
                     "tokens": r.tokens_used,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "stop_reasons": r.stop_reasons,
                     "duration_s": round(r.duration_s, 2),
                     "error": r.error,
                 }
@@ -384,6 +427,7 @@ class GraphTraversal:
         deep_analysis: bool = False,
         local: bool = False,
         api_url: str | None = None,
+        effort: str | None = None,
         # Kept for backwards compat
         base_tools: ToolRegistry | None = None,
     ):
@@ -398,7 +442,12 @@ class GraphTraversal:
         self.analysis_tools = analysis_tools or base_tools or ToolRegistry()
         self.max_agent_turns = max_agent_turns
         self.deep_analysis = deep_analysis
+        self.effort = effort
         self._is_local = local
+        self._report_lock = threading.Lock()
+        # Per-thread log of LLM calls for the node being analyzed; sibling nodes
+        # run concurrently under --parallel, so this cannot be instance state.
+        self._calls = threading.local()
 
         self._is_gemini = not local and model.startswith("gemini")
         self._is_openai = local or model.startswith(_OPENAI_PREFIXES)
@@ -430,7 +479,12 @@ class GraphTraversal:
         root_ids: list[str] | None = None,
         task_factory: Callable[[GraphNode, dict | None], str] = analyze_task,
     ) -> TraversalReport:
-        self._report = TraversalReport()
+        self._report = TraversalReport(
+            model=self.model,
+            deep_analysis=self.deep_analysis,
+            max_tokens=self.max_tokens,
+            effort=self.effort,
+        )
         self._visited = set()
 
         if root_ids:
@@ -481,6 +535,7 @@ class GraphTraversal:
         logger.info(f"{'  ' * depth}Analyzing [{node.node_type.value}] {node.name}")
 
         prompt = task_factory(node, context)
+        self._calls.log = []
 
         try:
             if self._is_gemini:
@@ -491,32 +546,47 @@ class GraphTraversal:
                 text, tokens = self._call_anthropic_with_verification(
                     prompt, node.code or ""
                 )
-
-            self._report.total_tokens += tokens
-
-            return NodeResult(
-                node_id=node.id,
-                node_name=node.name,
-                node_type=node.node_type.value,
-                file_path=node.file_path,
-                analysis=text,
-                tokens_used=tokens,
-                duration_s=time.time() - start,
-                depth=depth,
-            )
+            error = None
         except Exception as e:
             logger.error(f"Error analyzing {node.name}: {e}")
-            self._report.errors.append(f"{node.name}: {e}")
-            return NodeResult(
-                node_id=node.id,
-                node_name=node.name,
-                node_type=node.node_type.value,
-                file_path=node.file_path,
-                analysis="",
-                duration_s=time.time() - start,
-                depth=depth,
-                error=str(e),
-            )
+            text, tokens, error = "", 0, str(e)
+
+        # Calls that completed before an exception still cost money, so they are
+        # counted on the error path too.
+        calls = self._calls.log
+        in_tok = sum(c[0] for c in calls)
+        out_tok = sum(c[1] for c in calls)
+        reasons = [c[2] for c in calls]
+        flagged = [r for r in reasons if r in _TRUNCATED_REASONS
+                   or r in _REFUSED_REASONS or r.startswith("PROMPT_BLOCKED")]
+        if flagged:
+            logger.warning(f"{node.name}: incomplete pass(es): {flagged}")
+
+        with self._report_lock:
+            self._report.total_tokens += tokens
+            self._report.total_input_tokens += in_tok
+            self._report.total_output_tokens += out_tok
+            self._report.stop_reason_counts.update(reasons)
+            if error:
+                self._report.errors.append(f"{node.name}: {error}")
+
+        return NodeResult(
+            node_id=node.id,
+            node_name=node.name,
+            node_type=node.node_type.value,
+            file_path=node.file_path,
+            analysis=text,
+            tokens_used=tokens,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            stop_reasons=reasons,
+            duration_s=time.time() - start,
+            depth=depth,
+            error=error,
+        )
+
+    def _record_call(self, input_tokens: int, output_tokens: int, stop_reason: str):
+        self._calls.log.append((input_tokens, output_tokens, stop_reason or "unknown"))
 
     # ── Static analysis (server-side, no LLM) ─────────────────
 
@@ -551,15 +621,21 @@ class GraphTraversal:
 
     def _call_anthropic(self, prompt: str) -> tuple[str, int]:
         """Single Anthropic API call."""
-        response = self.client.messages.create(
+        kwargs = dict(
             model=self.model,
             max_tokens=self.max_tokens,
             system=self.system_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
+        if self.effort:
+            kwargs["output_config"] = {"effort": self.effort}
+        response = self.client.messages.create(**kwargs)
         text = "\n".join(
             block.text for block in response.content if block.type == "text"
         )
+        # output_tokens includes thinking tokens, which share the max_tokens budget.
+        self._record_call(response.usage.input_tokens, response.usage.output_tokens,
+                          response.stop_reason)
         tokens = response.usage.input_tokens + response.usage.output_tokens
         return text, tokens
 
@@ -652,7 +728,19 @@ Rules:
                 )
                 text = response.text or ""
                 usage = response.usage_metadata
-                tokens = (usage.prompt_token_count or 0) + (usage.candidates_token_count or 0)
+                prompt_tok = usage.prompt_token_count or 0
+                answer_tok = usage.candidates_token_count or 0
+                # Thinking tokens are reported separately and billed as output.
+                thought_tok = usage.thoughts_token_count or 0
+                if response.candidates:
+                    fr = response.candidates[0].finish_reason
+                    reason = fr.value if fr else "unknown"
+                elif response.prompt_feedback and response.prompt_feedback.block_reason:
+                    reason = f"PROMPT_BLOCKED:{response.prompt_feedback.block_reason.value}"
+                else:
+                    reason = "NO_CANDIDATES"
+                self._record_call(prompt_tok, answer_tok + thought_tok, reason)
+                tokens = prompt_tok + answer_tok
                 return text, tokens
             except Exception as e:
                 err_str = str(e)
@@ -756,8 +844,12 @@ Rules:
                 text = response.choices[0].message.content or ""
                 usage = response.usage
                 tokens = 0
+                in_tok = out_tok = 0
                 if usage:
-                    tokens = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+                    in_tok = usage.prompt_tokens or 0
+                    out_tok = usage.completion_tokens or 0
+                    tokens = in_tok + out_tok
+                self._record_call(in_tok, out_tok, response.choices[0].finish_reason)
                 return text, tokens
             except Exception as e:
                 err_str = str(e)

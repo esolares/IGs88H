@@ -10,8 +10,8 @@ Usage:
     graph = CodeGraph.from_json("path/to/graph.json")
 
     # Set up traversal with analysis (any supported model)
-    traversal = GraphTraversal(graph, model="claude-sonnet-4-6")   # Anthropic
-    traversal = GraphTraversal(graph, model="gemini-2.5-flash")    # Gemini
+    traversal = GraphTraversal(graph, model="claude-sonnet-5-5")   # Anthropic
+    traversal = GraphTraversal(graph, model="gemini-3.5-flash")    # Gemini
     traversal = GraphTraversal(graph, model="gpt-4o")              # OpenAI
     traversal = GraphTraversal(graph, model="llama3", local=True)  # Local (Ollama)
     report = traversal.traverse()

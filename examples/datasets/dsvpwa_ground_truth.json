@@ -24,5 +24,18 @@
     "CWE-89", "CWE-78", "CWE-22", "CWE-79", "CWE-502",
     "CWE-352", "CWE-384", "CWE-319", "CWE-601", "CWE-698", "CWE-1021"
   ],
+  "cwes": {
+    "CWE-89":   "SQL Injection",
+    "CWE-78":   "Command Injection",
+    "CWE-22":   "Path Traversal",
+    "CWE-79":   "Cross-Site Scripting",
+    "CWE-502":  "Deserialization of Untrusted Data",
+    "CWE-352":  "Cross-Site Request Forgery",
+    "CWE-384":  "Session Fixation",
+    "CWE-319":  "Insecure Transport",
+    "CWE-601":  "Open Redirect",
+    "CWE-698":  "Execution After Redirect",
+    "CWE-1021": "Clickjacking"
+  },
   "WARNING": "DO NOT EXECUTE — this is a deliberately vulnerable web application. Parse as text only."
 }

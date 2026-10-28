@@ -1,0 +1,43 @@
+{
+  "_readme": "Change models here. 'default_model' is used when --model is not given. benchmark.py reads the 'benchmark' block. Any model ID works; the provider is chosen by prefix (gemini* -> Google Vertex, gpt-/o1/o3/o4/chatgpt- -> OpenAI, everything else -> Anthropic).",
+
+  "default_model": "claude-sonnet-5-5",
+
+  "benchmark": {
+    "models": [
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
+      "gemini-3.5-flash",
+      "claude-sonnet-4-6"
+    ],
+    "task": "security",
+    "strategy": "bottom_up",
+    "parallel": 4,
+    "datasets": {
+      "dsvw": {
+        "graph": "examples/datasets/dsvw/graph.json",
+        "ground_truth": "dsvw-builtin",
+        "passes": [2, 3]
+      },
+      "securityeval": {
+        "graph": "examples/datasets/securityeval/graph.json",
+        "ground_truth": "examples/datasets/securityeval_ground_truth.json",
+        "passes": [3]
+      },
+      "igs88h": {
+        "codebase": ".",
+        "ground_truth": null,
+        "passes": [3]
+      }
+    }
+  },
+
+  "pricing_usd_per_mtok": {
+    "_source": "Anthropic: Claude API model table (cached 2026-09-25). Gemini: third-party aggregators, not yet confirmed on Google's pricing page. Models not listed show cost as n/a.",
+    "claude-opus-5-5":   {"input": 4.00, "output": 20.00},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5":  {"input": 1.00, "output": 5.00},
+    "gemini-3.5-flash":  {"input": 1.50, "output": 9.00, "verified": false}
+  }
+}

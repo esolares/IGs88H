@@ -34,5 +34,23 @@
     "CWE-611 (XXE)",
     "CWE-918 (SSRF)"
   ],
+  "cwes": {
+    "CWE-89":   "SQL Injection",
+    "CWE-22":   "Path Traversal",
+    "CWE-78":   "OS Command Injection",
+    "CWE-79":   "Cross-Site Scripting (XSS)",
+    "CWE-95":   "Eval/Code Injection",
+    "CWE-502":  "Pickle Deserialization",
+    "CWE-611":  "XXE",
+    "CWE-918":  "SSRF",
+    "CWE-235":  "HTTP Parameter Pollution",
+    "CWE-352":  "CSRF",
+    "CWE-1021": "Clickjacking",
+    "CWE-601":  "Open Redirect",
+    "CWE-113":  "HTTP Header Injection",
+    "CWE-400":  "Denial of Service",
+    "CWE-643":  "XPath Injection",
+    "CWE-94":   "Code Injection (exec/include)"
+  },
   "WARNING": "DO NOT EXECUTE — this is a deliberately vulnerable web server. Parse as text only."
 }

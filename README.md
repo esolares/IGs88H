@@ -54,10 +54,13 @@ uv tool install graphifyy
 cp .env.example .env  # fill in API keys
 
 # Analyze a codebase with Claude Sonnet (bottom-up, security audit)
-python igs88h.py /path/to/project --strategy bottom_up --task security --model claude-sonnet-4-6
+python igs88h.py /path/to/project --strategy bottom_up --task security --model claude-sonnet-5-5
+
+# Without --model, the default model from models.json is used (see "Choosing Models")
+python igs88h.py /path/to/project --strategy bottom_up --task security
 
 # Same analysis with Gemini Flash
-python igs88h.py /path/to/project --strategy bottom_up --task security --model gemini-2.5-flash
+python igs88h.py /path/to/project --strategy bottom_up --task security --model gemini-3.5-flash
 
 # Use a local model via Ollama (default: http://localhost:11434/v1)
 python igs88h.py /path/to/project --task security --local --model llama3
@@ -66,11 +69,11 @@ python igs88h.py /path/to/project --task security --local --model llama3
 python igs88h.py /path/to/project --local --model codellama --api-url http://localhost:8080/v1
 
 # Deep analysis (3-pass) — higher recall, catches commonly missed vulns
-python igs88h.py /path/to/project --task security --model gemini-2.5-flash --deep-analysis
+python igs88h.py /path/to/project --task security --model gemini-3.5-flash --deep-analysis
 
 # Output to organized results folder
-python igs88h.py /path/to/project --task security --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/security/myproject/report.json
+python igs88h.py /path/to/project --task security --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/security/myproject/report.json
 
 # Dry run: see what would be analyzed
 python igs88h.py /path/to/project --dry-run
@@ -78,6 +81,45 @@ python igs88h.py /path/to/project --dry-run
 # With an existing Graphify graph.json
 python igs88h.py --graph /path/to/graph.json
 ```
+
+## Choosing Models
+
+Model names are plain strings, so a new model needs no code change. There are two ways to pick one:
+
+1. **For one run**, pass `--model <model-id>`.
+2. **To change the default**, edit `default_model` in [`models.json`](models.json):
+
+   ```json
+   "default_model": "claude-sonnet-5-5",
+   ```
+
+   Any run without `--model` then uses it. The same file holds the benchmark model list and
+   per-model prices (see [Benchmarking](#benchmarking)).
+
+The model ID's prefix decides which provider is called:
+
+| Model ID starts with | Provider | Credentials |
+|---|---|---|
+| `gemini` | Google Gemini on Vertex AI (express mode) | `GEMINI_API_KEY` (Vertex express key) |
+| `gpt-`, `o1`, `o3`, `o4`, `chatgpt-` | OpenAI *(experimental)* | `OPENAI_API_KEY` |
+| anything, with `--local` | Local OpenAI-compatible server | none |
+| anything else (e.g. `claude-…`) | Anthropic | `ANTHROPIC_API_KEY` |
+
+Use the exact model ID the provider publishes, and check the provider's model list and
+retirement dates. Google, for example, retired `gemini-2.5-*` on Vertex AI on 2026-10-20.
+After that, requests for it return `404 Publisher model ... not found` even though the API key is
+valid.
+
+Output-length and effort controls:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--max-tokens N` | `4096` | Max output tokens per LLM call. On Claude 5.x models thinking is always on, and thinking tokens count against this limit. |
+| `--effort LEVEL` | not sent | Anthropic only: `low`, `medium`, `high`, `xhigh`, `max`. When unset, the model's default applies (`claude-opus-5-5`: medium; most others: high). |
+
+Every report's `summary` records `total_input_tokens`, `total_output_tokens`, `llm_calls`,
+`stop_reasons`, `truncated_calls` and `refused_calls`. A pass that hit `--max-tokens` or that the
+provider refused is still kept and scored, so check these counts before trusting a result.
 
 ## Walkthrough: Analyzing DSVW
 
@@ -106,44 +148,44 @@ cp examples/datasets/dsvw_ground_truth.json examples/datasets/dsvw/ground_truth.
 python igs88h.py examples/datasets/dsvw --dry-run --strategy bottom_up
 
 # General analysis — summarize, find bugs, assess complexity
-python igs88h.py examples/datasets/dsvw --task analyze --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/analyze/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task analyze --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/analyze/dsvw/report.json
 
 # Security audit — OWASP-focused, severity ratings, CWE identifiers
-python igs88h.py examples/datasets/dsvw --task security --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/security/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task security --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/security/dsvw/report.json
 
 # Data flow — trace inputs through transforms to sinks, flag taint paths
-python igs88h.py examples/datasets/dsvw --task dataflow --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/dataflow/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task dataflow --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/dataflow/dsvw/report.json
 
 # Best practices — PEP8, naming, error handling, magic values
-python igs88h.py examples/datasets/dsvw --task practices --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/practices/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task practices --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/practices/dsvw/report.json
 
 # OOP design — SOLID violations, encapsulation, scoping
-python igs88h.py examples/datasets/dsvw --task oop --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/oop/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task oop --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/oop/dsvw/report.json
 
 # Duplication — internal + cross-node code clones, boilerplate
-python igs88h.py examples/datasets/dsvw --task duplication --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/duplication/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task duplication --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/duplication/dsvw/report.json
 
 # Refactoring — SRP, extract method, dead code, design patterns
-python igs88h.py examples/datasets/dsvw --task refactor --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/refactor/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task refactor --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/refactor/dsvw/report.json
 
 # Dependency audit — imports, coupling level, circular risks
-python igs88h.py examples/datasets/dsvw --task deps --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/deps/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task deps --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/deps/dsvw/report.json
 
 # Test generation — runnable pytest code with mocks and edge cases
-python igs88h.py examples/datasets/dsvw --task test_gen --model gemini-2.5-flash \
-  --output results/gemini-2.5-flash/test_gen/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task test_gen --model gemini-3.5-flash \
+  --output results/gemini-3.5-flash/test_gen/dsvw/report.json
 
 # Deep security analysis (3-pass) — catches CWEs missed by standard
-python igs88h.py examples/datasets/dsvw --task security --model gemini-2.5-flash \
-  --deep-analysis --output results/gemini-2.5-flash-3pass/security/dsvw/report.json
+python igs88h.py examples/datasets/dsvw --task security --model gemini-3.5-flash \
+  --deep-analysis --output results/gemini-3.5-flash-3pass/security/dsvw/report.json
 ```
 
 ## Task Factories
@@ -178,10 +220,13 @@ Evaluated against ground truth on two vulnerable datasets. See
 [analysis.md](analysis.md) for the full report including per-CWE breakdowns,
 confusion matrices, and cost analysis.
 
+Measured in June 2026 with Gemini 2.5 Flash, which has since been retired on Vertex AI. To
+re-measure with current models, see [Benchmarking](#benchmarking).
+
 | Config | GT CWEs | TP | FN | Recall (exact) | Recall (broad) |
 |--------|:-------:|:--:|:--:|:--------------:|:--------------:|
-| Gemini Flash — standard (2-pass) | 26 | 21 | 5 | 80.8% | 80.8% |
-| Gemini Flash — deep (3-pass) | 26 | 25 | 1 | 96.2% | **100%** |
+| Gemini 2.5 Flash — standard (2-pass) | 26 | 21 | 5 | 80.8% | 80.8% |
+| Gemini 2.5 Flash — deep (3-pass) | 26 | 25 | 1 | 96.2% | **100%** |
 
 **Deep analysis catches the hardest vulnerabilities.** The 4 CWEs missed by
 standard analysis — CWE-113 (header injection), CWE-235 (parameter pollution),
@@ -192,7 +237,55 @@ than CWE-95 (eval injection), both in the same vulnerability family.
 
 **Token overhead:** ~+20% on small codebases (6 nodes), ~+53% on larger ones (72 nodes).
 
-## Task Scorecard — Gemini Flash on DSVW (6 nodes)
+## Benchmarking
+
+`benchmark.py` runs the same task, with the same flags, for several models over several
+datasets, then scores all reports in one side-by-side table. The models, datasets and prices it
+uses come from the `benchmark` block in [`models.json`](models.json):
+
+```json
+"benchmark": {
+  "models": ["claude-sonnet-5-5", "claude-opus-5-5", "gemini-3.5-flash", "claude-sonnet-4-6"],
+  "task": "security",
+  "strategy": "bottom_up",
+  "parallel": 4,
+  "datasets": {
+    "dsvw":         {"graph": "examples/datasets/dsvw/graph.json", "ground_truth": "dsvw-builtin", "passes": [2, 3]},
+    "securityeval": {"graph": "examples/datasets/securityeval/graph.json",
+                     "ground_truth": "examples/datasets/securityeval_ground_truth.json", "passes": [3]},
+    "igs88h":       {"codebase": ".", "ground_truth": null, "passes": [3]}
+  }
+}
+```
+
+To benchmark a different model, add or replace its ID in `models`. `passes` is 2 (standard) or
+3 (`--deep-analysis`). `ground_truth` is a CWE JSON file, `"dsvw-builtin"` for the DSVW
+categories built into the scorer, or `null` to report findings without precision or recall.
+Optional `max_tokens` and `effort` keys are passed through to every run.
+
+```bash
+python benchmark.py plan     # run matrix, existing reports, rough cost; no API calls
+python benchmark.py run      # run every missing report (paid API calls)
+python benchmark.py run --models claude-sonnet-5-5 --datasets dsvw   # one cell group
+python benchmark.py score    # score every report under results/; no API calls
+python benchmark.py score --json results/benchmark_scores_2026-10-28.json
+```
+
+- Reports are written to `results/<model>[-3pass]/<task>/<dataset>/report.json`, with that run's
+  log in `run.log` beside it.
+- An existing report is never overwritten. To rerun a cell, move the old report aside first.
+- Models run concurrently, since each has its own rate limit. Each model's datasets run one
+  after another.
+- `score` covers every report it finds for each dataset, including older runs. It prints TP, FP,
+  FN, precision, recall and F1 (as distinct CWEs vs ground truth), plus input and output tokens,
+  estimated cost, time, truncated and refused calls, and errors.
+- Rows marked `*` are legacy reports from code older than 2026-10-28. They have no token split
+  or stop reasons, so their cost and truncation columns show `n/a`.
+- A cost marked `?` uses a price that hasn't been confirmed against the provider's pricing page.
+- For a `codebase` dataset, `igs88h.py` reuses `graphify-out/graph.json` and never refreshes it.
+  `plan` warns when that graph is older than the source. Move the graph aside to rebuild it.
+
+## Task Scorecard — Gemini 2.5 Flash on DSVW (6 nodes, June 2026)
 
 All 9 task factories tested against [DSVW](https://github.com/stamparm/DSVW)
 (Damn Small Vulnerable Web), bottom-up traversal, standard 2-pass analysis:
@@ -224,8 +317,8 @@ All 9 task factories tested against [DSVW](https://github.com/stamparm/DSVW)
 
 | Provider | Model examples | Analysis mode | Env var |
 |----------|---------------|---------------|---------|
-| Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5` | Multi-pass: static hints + verification (+ deep) | `ANTHROPIC_API_KEY` |
-| Google Gemini | `gemini-2.5-flash`, `gemini-2.5-pro` | Multi-pass: static hints + verification (+ deep) | `GEMINI_API_KEY` |
+| Anthropic | `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-4-5` | Multi-pass: static hints + verification (+ deep) | `ANTHROPIC_API_KEY` |
+| Google Gemini | `gemini-3.5-flash` | Multi-pass: static hints + verification (+ deep) | `GEMINI_API_KEY` |
 | OpenAI *(experimental)* | `gpt-4o`, `gpt-4.1` | Multi-pass: static hints + verification (+ deep) | `OPENAI_API_KEY` |
 | Local models | `llama3`, `codellama`, `qwen2.5-coder`, any | Multi-pass: static hints + verification (+ deep) | None (uses `--local`) |
 
@@ -271,11 +364,11 @@ results/
 ├── claude-sonnet-4-6-3pass/     # deep analysis (3-pass)
 │   └── security/
 │       └── dsvw/
-├── gemini-2.5-flash/            # standard (2-pass)
+├── gemini-3.5-flash/            # standard (2-pass)
 │   └── security/
 │       ├── dsvpwa/
 │       └── dsvw/
-├── gemini-2.5-flash-3pass/      # deep analysis (3-pass)
+├── gemini-3.5-flash-3pass/      # deep analysis (3-pass)
 │   └── security/
 │       ├── dsvpwa/
 │       └── dsvw/
